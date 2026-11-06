@@ -86,7 +86,8 @@ let forcedSockets = new WeakSet<GatewaySocket>()
 let transportErrorReported = false
 let authRescueUsed = false
 let guardUntil = 0
-const identifiedTransports = new WeakSet<Transport>()
+/** Messages held back until the session is ready, per connection. */
+const heldFrames = new WeakMap<Transport, string[]>()
 const transportPatches = new Map<Transport, () => void>()
 const timers = new Set<Timer>()
 const identifyListeners = new Set<() => void>()
@@ -199,6 +200,39 @@ function wrapClose(transport: Transport) {
 	}
 }
 
+function holdFrame(
+	transport: Transport,
+	socket: GatewaySocket,
+	data: string,
+	send: (...a: unknown[]) => unknown,
+) {
+	const queue = heldFrames.get(transport)
+	if (queue) {
+		queue.push(data)
+		return
+	}
+	heldFrames.set(transport, [data])
+
+	const tick = (n: number): void => {
+		const frames = heldFrames.get(transport)
+		if (!frames) return
+		if (transport.readyState !== WebSocketOpen || n > 150) {
+			heldFrames.delete(transport)
+			return
+		}
+		if (!socket.sessionId) return later(() => tick(n + 1), 100)
+		heldFrames.delete(transport)
+		for (const frame of frames) {
+			try {
+				send.call(transport, frame)
+			} catch (e) {
+				reportError(e)
+			}
+		}
+	}
+	later(() => tick(0), 100)
+}
+
 function patchTransport(socket: GatewaySocket) {
 	const transport = socket.webSocket
 	if (!transport || typeof transport.send !== 'function') return
@@ -219,22 +253,21 @@ function patchTransport(socket: GatewaySocket) {
 			try {
 				const frame = JSON.parse(data)
 				const op = frame?.op
-				if (op === IdentifyOp || op === ResumeOp)
-					identifiedTransports.add(transport)
 
-				// After a forced reconnect the app sends its usual messages (voice
-				// state, subscriptions...) on the new connection before it has logged
-				// in. Discord closes that with 4003 Not authenticated, which ends in
-				// 4004 and a logout. Hold those back until the login has been sent.
+				// After a forced reconnect the app still thinks it is ready, so it
+				// sends its usual messages (voice state, subscriptions...) right after
+				// IDENTIFY, while Discord is still building the session. Discord
+				// closes that with 4003 Not authenticated, which ends in 4004 and a
+				// logout. Hold those back until READY, then send them in order.
 				if (
 					Date.now() < guardUntil &&
-					!identifiedTransports.has(transport) &&
 					!socket.sessionId &&
 					op !== HeartbeatOp &&
 					op !== IdentifyOp &&
 					op !== ResumeOp
 				) {
 					trackSend(transport, `x${op}`)
+					holdFrame(transport, socket, data, originalSend)
 					return
 				}
 
