@@ -131,13 +131,13 @@ function poll(everyMs: number, maxTries: number, tick: () => boolean | void) {
 	next()
 }
 
-let spoofApplied = false
+/** Spoofing starts only once we force a reconnect after a normal login. */
+let armed = false
 
 function applySpoof(payload: IdentifyPayload | undefined) {
 	const platform = getPlatform()
-	if (platform === 'off' || !payload?.properties) return false
+	if (!armed || platform === 'off' || !payload?.properties) return false
 	Object.assign(payload.properties, SpoofedProperties[platform])
-	spoofApplied = true
 	// A spoofed login makes READY slow, and the app sends its post-login ops
 	// early (4003). Hold them back for every spoofed login, not just forced ones.
 	guardUntil = Date.now() + GuardWindowMs
@@ -406,6 +406,7 @@ export function forceIdentify() {
 		else patchTransport(socket)
 
 		lastIdentifyAt = Date.now()
+		armed = true
 		authRescueUsed = false
 		guardUntil = Date.now() + GuardWindowMs
 		forcedSockets.add(socket)
@@ -420,15 +421,15 @@ export function forceIdentify() {
 }
 
 /**
- * At launch, wait for the first login to finish. Only force a reconnect if that
- * login went out unspoofed; forcing it mid-connect got the account logged out.
+ * At launch Discord rejects a spoofed first login (4004, logout). Let the normal
+ * login finish, then force the spoofed one, the same path as changing platform.
  */
 function forceAfterReady(socket: GatewaySocket) {
 	if (forcedSockets.has(socket)) return
 	forcedSockets.add(socket)
 	poll(100, 200, () => {
 		if (!socket.sessionId) return false
-		if (!spoofApplied && getPlatform() !== 'off') forceIdentify()
+		later(() => getPlatform() !== 'off' && forceIdentify(), 3000)
 		return true
 	})
 }
@@ -464,7 +465,7 @@ function teardown() {
 	retryPending = false
 	lastIdentifyAt = 0
 	forcedSockets = new WeakSet()
-	spoofApplied = false
+	armed = false
 	closeLog.length = 0
 	guardUntil = 0
 	unpatchSocket?.()
