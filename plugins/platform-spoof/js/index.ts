@@ -31,7 +31,7 @@ const HeartbeatOp = 1
 const IdentifyOp = 2
 const ResumeOp = 6
 /** How long after a forced reconnect to hold back messages sent before login. */
-const GuardWindowMs = 30_000
+const GuardWindowMs = 20_000
 /** Gateway close code for a rejected token; Discord's client logs you out on it. */
 const AuthFailedCode = 4004
 /** Reconnectable close code the client answers with a fresh connection. */
@@ -44,6 +44,8 @@ const MinReconnectIntervalMs = 3000
 interface Transport {
 	readyState: number
 	onclose?: unknown
+	addEventListener?(type: string, listener: (event: { data?: unknown }) => void): void
+	removeEventListener?(type: string, listener: (event: { data?: unknown }) => void): void
 	send(data: unknown): void
 	close(): void
 }
@@ -86,6 +88,10 @@ let forcedSockets = new WeakSet<GatewaySocket>()
 let transportErrorReported = false
 let authRescueUsed = false
 let guardUntil = 0
+/** Connections that sent IDENTIFY and are waiting for Discord's READY. */
+const awaitingReady = new WeakSet<Transport>()
+/** Connections where READY arrived. The app's own session id is unreliable: it can come from cache. */
+const readyTransports = new WeakSet<Transport>()
 /** Messages held back until the session is ready, per connection. */
 const heldFrames = new WeakMap<Transport, string[]>()
 const transportPatches = new Map<Transport, () => void>()
@@ -206,9 +212,23 @@ function wrapClose(transport: Transport) {
 	}
 }
 
+/** READY is the first large message after IDENTIFY; heartbeat ACKs are tiny. */
+function watchReady(transport: Transport) {
+	if (typeof transport.addEventListener !== 'function') return () => {}
+	const onMessage = (event: { data?: unknown }) => {
+		if (!awaitingReady.has(transport)) return
+		const d = event?.data as { byteLength?: number; size?: number } | string | undefined
+		const size = typeof d === 'string' ? d.length : (d?.byteLength ?? d?.size ?? 0)
+		if (size < 500) return
+		awaitingReady.delete(transport)
+		readyTransports.add(transport)
+	}
+	transport.addEventListener('message', onMessage)
+	return () => transport.removeEventListener?.('message', onMessage)
+}
+
 function holdFrame(
 	transport: Transport,
-	socket: GatewaySocket,
 	data: string,
 	send: (...a: unknown[]) => unknown,
 ) {
@@ -226,7 +246,8 @@ function holdFrame(
 			heldFrames.delete(transport)
 			return
 		}
-		if (!socket.sessionId) return later(() => tick(n + 1), 100)
+		if (!readyTransports.has(transport) && Date.now() < guardUntil)
+			return later(() => tick(n + 1), 100)
 		heldFrames.delete(transport)
 		for (const frame of frames) {
 			try {
@@ -245,6 +266,7 @@ function patchTransport(socket: GatewaySocket) {
 	if (transportPatches.has(transport)) return
 
 	const unwrapClose = wrapClose(transport)
+	const unwatchReady = watchReady(transport)
 	const originalSend = transport.send
 	const wrappedSend = function (this: Transport, ...args: unknown[]) {
 			const call = (...next: unknown[]) =>
@@ -259,6 +281,7 @@ function patchTransport(socket: GatewaySocket) {
 			try {
 				const frame = JSON.parse(data)
 				const op = frame?.op
+				if (op === IdentifyOp) awaitingReady.add(transport)
 
 				// After a forced reconnect the app still thinks it is ready, so it
 				// sends its usual messages (voice state, subscriptions...) right after
@@ -267,13 +290,13 @@ function patchTransport(socket: GatewaySocket) {
 				// logout. Hold those back until READY, then send them in order.
 				if (
 					Date.now() < guardUntil &&
-					!socket.sessionId &&
+					!readyTransports.has(transport) &&
 					op !== HeartbeatOp &&
 					op !== IdentifyOp &&
 					op !== ResumeOp
 				) {
 					trackSend(transport, `x${op}`)
-					holdFrame(transport, socket, data, originalSend)
+					holdFrame(transport, data, originalSend)
 					return
 				}
 
@@ -294,6 +317,7 @@ function patchTransport(socket: GatewaySocket) {
 	transportPatches.set(transport, () => {
 		unpatchSend()
 		unwrapClose()
+		unwatchReady()
 	})
 }
 
@@ -308,7 +332,10 @@ function patchSocket(socket: GatewaySocket) {
 
 	const unpatches = [
 		before(socket, 'send', args => {
-			if (args[0] === IdentifyOp) applySpoof(args[1] as IdentifyPayload)
+			if (args[0] === IdentifyOp) {
+				applySpoof(args[1] as IdentifyPayload)
+				if (socket.webSocket) awaitingReady.add(socket.webSocket)
+			}
 			return args
 		}),
 	]
@@ -427,8 +454,12 @@ export function forceIdentify() {
 function forceAfterReady(socket: GatewaySocket) {
 	if (forcedSockets.has(socket)) return
 	forcedSockets.add(socket)
+	const start = Date.now()
 	poll(100, 200, () => {
-		if (!socket.sessionId) return false
+		// Don't trust socket.sessionId here: the app can fill it from cache.
+		const live = socket.webSocket
+		if (!(live && readyTransports.has(live)) && Date.now() - start < 15_000)
+			return false
 		later(() => getPlatform() !== 'off' && forceIdentify(), 3000)
 		return true
 	})
