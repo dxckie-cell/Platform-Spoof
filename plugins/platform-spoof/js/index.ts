@@ -6,7 +6,7 @@ import type { JsonStorage } from '@valenced/json-storage'
 
 const DEBUG: boolean = false
 
-export const Platforms = ['off', 'desktop', 'web', 'meta', 'console', 'control'] as const
+export const Platforms = ['off', 'desktop', 'web', 'meta', 'console', 'control', 'control_locale', 'control_os'] as const
 export type Platform = (typeof Platforms)[number]
 export const DefaultPlatform: Platform = 'off'
 
@@ -67,6 +67,8 @@ const SpoofedProperties: Record<Exclude<Platform, 'off'>, Record<string, unknown
 		},
 		// Debug control: force the same reconnect but send the app's own identity.
 		control: {},
+		control_locale: { system_locale: 'en-US' },
+		control_os: { os: 'Windows' },
 		console: {
 			os: 'Windows',
 			os_version: '10',
@@ -203,9 +205,12 @@ function applySpoof(payload: IdentifyPayload | undefined) {
 	const platform = getPlatform()
 	if (!armed || platform === 'off' || platform === 'control' || !payload?.properties)
 		return false
+	const isControl = platform.startsWith('control')
 	Object.assign(payload.properties, SpoofedProperties[platform])
-	for (const key of PhoneOnlyProperties) delete payload.properties[key]
-	if (NoClientVersion.includes(platform)) delete payload.properties.client_version
+	if (!isControl) {
+		for (const key of PhoneOnlyProperties) delete payload.properties[key]
+		if (NoClientVersion.includes(platform)) delete payload.properties.client_version
+	}
 	// A spoofed login makes READY slow, and the app sends its post-login ops
 	// early (4003). Hold them back for every spoofed login, not just forced ones.
 	guardUntil = Date.now() + GuardWindowMs
