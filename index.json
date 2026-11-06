@@ -1,0 +1,31 @@
+{
+  "format": 1,
+  "name": "Platform Spoof",
+  "description": "Platform Spoof for Valenced, forked from k1ng_op’s plugin",
+  "plugins": {
+    "k1ngop.platform-spoof": {
+      "name": "Platform Spoof",
+      "description": "Spoofs your Discord gateway platform so others see a different client icon on your profile.",
+      "author": "k1ng_op <641266820187160576> (https://github.com/k1ng0p \"GitHub\")",
+      "icon": "LaptopPhoneIcon",
+      "channels": {
+        "latest": "1.0.1"
+      },
+      "versions": {
+        "1.0.1": {
+          "url": "https://dxckie-cell.github.io/Platform-Spoof/pool/k1ngop.platform-spoof@1.0.1.zip",
+          "sha256": "908366807663dee779cc6b4365d7f064d5cfa563490310bd60f81ac3988f8d5a",
+          "size": 2979,
+          "dependencies": {
+            "valenced.api": {
+              "version": ">=1 <2"
+            },
+            "discord": {
+              "version": "*"
+            }
+          }
+        }
+      }
+    }
+  }
+}
