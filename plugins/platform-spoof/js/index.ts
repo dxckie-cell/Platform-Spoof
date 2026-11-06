@@ -14,25 +14,38 @@ export interface Settings {
 	platform: Platform
 	/** Last gateway close seen while spoofing, shown in settings for debugging. */
 	lastClose?: string
-	/** The app's own IDENTIFY properties before spoofing, for debugging. */
-	identifyProps?: string
 }
 
-const WindowsChromeUA =
+const ChromeUA =
 	'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36'
+const ElectronUA =
+	'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) discord/1.0.9188 Chrome/128.0.6613.186 Electron/32.2.7 Safari/537.36'
 
 /**
- * Gateway IDENTIFY properties that make Discord show each client icon. Only
- * changing `browser` left a phone's os/device behind (a combination no real
- * client sends), and Discord then ended the session (4003, 4004, logout).
+ * Gateway IDENTIFY properties that make Discord show each client icon. The app
+ * sends Android values (client_version "352.6 - rn", a huge build number, device
+ * model...), so changing only `browser` produced an identity no real client
+ * has. Each platform gets a full matching set; the build numbers are
+ * placeholders, not looked up. shortcut: static values, update if Discord starts
+ * rejecting stale builds.
  */
 const SpoofedProperties: Record<Exclude<Platform, 'off'>, Record<string, unknown>> =
 	{
 		desktop: {
 			os: 'Windows',
 			os_version: '10.0.22631',
+			os_arch: 'x64',
+			app_arch: 'x64',
+			os_sdk_version: '22631',
 			device: '',
 			browser: 'Discord Client',
+			browser_version: '32.2.7',
+			browser_user_agent: ElectronUA,
+			release_channel: 'stable',
+			client_version: '1.0.9188',
+			client_build_number: 420000,
+			native_build_number: 65000,
+			client_app_state: 'focused',
 		},
 		web: {
 			os: 'Windows',
@@ -40,19 +53,36 @@ const SpoofedProperties: Record<Exclude<Platform, 'off'>, Record<string, unknown
 			device: '',
 			browser: 'Chrome',
 			browser_version: '130.0.0.0',
-			browser_user_agent: WindowsChromeUA,
+			browser_user_agent: ChromeUA,
+			release_channel: 'stable',
+			client_build_number: 420000,
+			client_app_state: 'focused',
 		},
-		meta: { os: 'Android', os_version: '12', device: 'Quest', browser: 'Discord VR' },
+		meta: {
+			os: 'Android',
+			os_version: '12',
+			device: 'Quest',
+			browser: 'Discord VR',
+			release_channel: 'stable',
+		},
 		console: {
 			os: 'Windows',
 			os_version: '10',
 			device: '',
 			browser: 'Discord Embedded',
+			release_channel: 'stable',
 		},
 	}
 
-/** Phone-only fields that no desktop, web, VR or console client sends. */
-const PhoneOnlyProperties = ['device_vendor_id', 'os_sdk_version']
+/** Phone-only fields no desktop, web, VR or console client sends. */
+const PhoneOnlyProperties = [
+	'device_vendor_id',
+	'device_model_name',
+	'design_id',
+	'install_source',
+]
+// web and VR/console have no app version
+const NoClientVersion: Array<Exclude<Platform, 'off'>> = ['web', 'meta', 'console']
 
 const HeartbeatOp = 1
 const IdentifyOp = 2
@@ -167,28 +197,12 @@ function poll(everyMs: number, maxTries: number, tick: () => boolean | void) {
 /** Spoofing starts only once we force a reconnect after a normal login. */
 let armed = false
 
-/** Keeps the app's own properties (device id hidden) so the real shape can be copied. */
-function saveIdentifyProps(properties: Record<string, unknown>) {
-	if (storage?.cache?.identifyProps) return
-	const shown = { ...properties }
-	if ('device_vendor_id' in shown) shown.device_vendor_id = '<hidden>'
-	try {
-		storage?.set({
-			platform: getPlatform(),
-			lastClose: storage.cache?.lastClose,
-			identifyProps: JSON.stringify(shown).slice(0, 900),
-		})
-	} catch (e) {
-		reportError(e)
-	}
-}
-
 function applySpoof(payload: IdentifyPayload | undefined) {
 	const platform = getPlatform()
 	if (!armed || platform === 'off' || !payload?.properties) return false
-	saveIdentifyProps(payload.properties)
 	Object.assign(payload.properties, SpoofedProperties[platform])
 	for (const key of PhoneOnlyProperties) delete payload.properties[key]
+	if (NoClientVersion.includes(platform)) delete payload.properties.client_version
 	// A spoofed login makes READY slow, and the app sends its post-login ops
 	// early (4003). Hold them back for every spoofed login, not just forced ones.
 	guardUntil = Date.now() + GuardWindowMs
@@ -213,11 +227,7 @@ function recordClose(note: string, platform: Platform = getPlatform()) {
 	closeLog.push(note)
 	if (closeLog.length > 3) closeLog.shift()
 	try {
-		storage?.set({
-			platform,
-			lastClose: closeLog.join(' | '),
-			identifyProps: storage.cache?.identifyProps,
-		})
+		storage?.set({ platform, lastClose: closeLog.join(' | ') })
 	} catch (e) {
 		reportError(e)
 	}
