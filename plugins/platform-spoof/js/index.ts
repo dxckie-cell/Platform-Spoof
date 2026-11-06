@@ -31,7 +31,7 @@ const HeartbeatOp = 1
 const IdentifyOp = 2
 const ResumeOp = 6
 /** How long after a forced reconnect to hold back messages sent before login. */
-const GuardWindowMs = 20_000
+const GuardWindowMs = 30_000
 /** Gateway close code for a rejected token; Discord's client logs you out on it. */
 const AuthFailedCode = 4004
 /** Reconnectable close code the client answers with a fresh connection. */
@@ -138,6 +138,9 @@ function applySpoof(payload: IdentifyPayload | undefined) {
 	if (platform === 'off' || !payload?.properties) return false
 	Object.assign(payload.properties, SpoofedProperties[platform])
 	spoofApplied = true
+	// A spoofed login makes READY slow, and the app sends its post-login ops
+	// early (4003). Hold them back for every spoofed login, not just forced ones.
+	guardUntil = Date.now() + GuardWindowMs
 	return true
 }
 
