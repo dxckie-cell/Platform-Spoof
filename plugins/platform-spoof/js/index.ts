@@ -1,6 +1,6 @@
 import { getModules } from '@valenced/modules/finders'
 import { withProps } from '@valenced/modules/finders/filters'
-import { after, before } from '@valenced/patcher'
+import { after, before, instead } from '@valenced/patcher'
 import SettingsComponent from './settings'
 import type { JsonStorage } from '@valenced/json-storage'
 
@@ -27,7 +27,11 @@ const SpoofedProperties: Record<
 	console: { browser: 'Discord Embedded' },
 }
 
+const HeartbeatOp = 1
 const IdentifyOp = 2
+const ResumeOp = 6
+/** How long after a forced reconnect to hold back messages sent before login. */
+const GuardWindowMs = 20_000
 /** Gateway close code for a rejected token; Discord's client logs you out on it. */
 const AuthFailedCode = 4004
 /** Reconnectable close code the client answers with a fresh connection. */
@@ -81,6 +85,8 @@ let lastIdentifyAt = 0
 let forcedSockets = new WeakSet<GatewaySocket>()
 let transportErrorReported = false
 let authRescueUsed = false
+let guardUntil = 0
+const identifiedTransports = new WeakSet<Transport>()
 const transportPatches = new Map<Transport, () => void>()
 const timers = new Set<Timer>()
 const identifyListeners = new Set<() => void>()
@@ -199,24 +205,50 @@ function patchTransport(socket: GatewaySocket) {
 	if (transportPatches.has(transport)) return
 
 	const unwrapClose = wrapClose(transport)
-	const unpatchSend = before(transport, 'send', ([data]) => {
+	const unpatchSend = instead(
+		transport,
+		'send',
+		(args: unknown[], original: (...a: unknown[]) => unknown) => {
+			const [data] = args
 			if (typeof data !== 'string') {
 				trackSend(transport, 'bin')
-				return [data]
+				return original(...args)
 			}
+
+			let out = data
 			try {
 				const frame = JSON.parse(data)
-				trackSend(transport, frame?.op)
-				if (frame?.op === IdentifyOp && applySpoof(frame.d))
-					return [JSON.stringify(frame)]
+				const op = frame?.op
+				if (op === IdentifyOp || op === ResumeOp)
+					identifiedTransports.add(transport)
+
+				// After a forced reconnect the app sends its usual messages (voice
+				// state, subscriptions...) on the new connection before it has logged
+				// in. Discord closes that with 4003 Not authenticated, which ends in
+				// 4004 and a logout. Hold those back until the login has been sent.
+				if (
+					Date.now() < guardUntil &&
+					!identifiedTransports.has(transport) &&
+					!socket.sessionId &&
+					op !== HeartbeatOp &&
+					op !== IdentifyOp &&
+					op !== ResumeOp
+				) {
+					trackSend(transport, `x${op}`)
+					return
+				}
+
+				trackSend(transport, op)
+				if (op === IdentifyOp && applySpoof(frame.d)) out = JSON.stringify(frame)
 			} catch (e) {
 				if (!transportErrorReported) {
 					transportErrorReported = true
 					reportError(e)
 				}
 			}
-			return [data]
-		})
+			return original(out, ...args.slice(1))
+		},
+	)
 	transportPatches.set(transport, () => {
 		unpatchSend()
 		unwrapClose()
@@ -333,6 +365,7 @@ export function forceIdentify() {
 
 		lastIdentifyAt = Date.now()
 		authRescueUsed = false
+		guardUntil = Date.now() + GuardWindowMs
 		forcedSockets.add(socket)
 		for (const listener of identifyListeners) listener()
 
@@ -376,6 +409,7 @@ function teardown() {
 	lastIdentifyAt = 0
 	forcedSockets = new WeakSet()
 	closeLog.length = 0
+	guardUntil = 0
 	unpatchSocket?.()
 	unpatchTransports()
 	unpatchSocket = patchedSocket = socketModule = storage = undefined
