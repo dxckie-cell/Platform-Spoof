@@ -6,7 +6,7 @@ import type { JsonStorage } from '@valenced/json-storage'
 
 const DEBUG: boolean = false
 
-export const Platforms = ['off', 'desktop', 'web', 'meta', 'console'] as const
+export const Platforms = ['off', 'desktop', 'web', 'meta', 'console', 'control'] as const
 export type Platform = (typeof Platforms)[number]
 export const DefaultPlatform: Platform = 'off'
 
@@ -65,6 +65,8 @@ const SpoofedProperties: Record<Exclude<Platform, 'off'>, Record<string, unknown
 			browser: 'Discord VR',
 			release_channel: 'stable',
 		},
+		// Debug control: force the same reconnect but send the app's own identity.
+		control: {},
 		console: {
 			os: 'Windows',
 			os_version: '10',
@@ -199,7 +201,8 @@ let armed = false
 
 function applySpoof(payload: IdentifyPayload | undefined) {
 	const platform = getPlatform()
-	if (!armed || platform === 'off' || !payload?.properties) return false
+	if (!armed || platform === 'off' || platform === 'control' || !payload?.properties)
+		return false
 	Object.assign(payload.properties, SpoofedProperties[platform])
 	for (const key of PhoneOnlyProperties) delete payload.properties[key]
 	if (NoClientVersion.includes(platform)) delete payload.properties.client_version
