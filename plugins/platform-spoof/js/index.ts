@@ -131,10 +131,13 @@ function poll(everyMs: number, maxTries: number, tick: () => boolean | void) {
 	next()
 }
 
+let spoofApplied = false
+
 function applySpoof(payload: IdentifyPayload | undefined) {
 	const platform = getPlatform()
 	if (platform === 'off' || !payload?.properties) return false
 	Object.assign(payload.properties, SpoofedProperties[platform])
+	spoofApplied = true
 	return true
 }
 
@@ -413,12 +416,26 @@ export function forceIdentify() {
 	}
 }
 
+/**
+ * At launch, wait for the first login to finish. Only force a reconnect if that
+ * login went out unspoofed; forcing it mid-connect got the account logged out.
+ */
+function forceAfterReady(socket: GatewaySocket) {
+	if (forcedSockets.has(socket)) return
+	forcedSockets.add(socket)
+	poll(100, 200, () => {
+		if (!socket.sessionId) return false
+		if (!spoofApplied && getPlatform() !== 'off') forceIdentify()
+		return true
+	})
+}
+
 function attachToGateway() {
 	const attach = () => {
 		const socket = getSocket()
 		if (!socket) return false
 		patchSocket(socket)
-		if (getPlatform() !== 'off') forceIdentify()
+		if (getPlatform() !== 'off') forceAfterReady(socket)
 		return true
 	}
 	if (!attach()) poll(50, 150, attach)
@@ -434,7 +451,7 @@ function attachToGateway() {
 		if (live !== patchedSocket) patchSocket(live)
 		// attach() already forced this socket; forcing again would open a second
 		// fresh session a few seconds after the first (suspected cause of logouts).
-		if (getPlatform() !== 'off' && !forcedSockets.has(live)) forceIdentify()
+		if (getPlatform() !== 'off') forceAfterReady(live)
 	})
 }
 
@@ -444,6 +461,7 @@ function teardown() {
 	retryPending = false
 	lastIdentifyAt = 0
 	forcedSockets = new WeakSet()
+	spoofApplied = false
 	closeLog.length = 0
 	guardUntil = 0
 	unpatchSocket?.()
