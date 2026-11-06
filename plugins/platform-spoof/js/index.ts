@@ -16,16 +16,41 @@ export interface Settings {
 	lastClose?: string
 }
 
-/** Gateway IDENTIFY properties that make Discord show each client icon. */
-const SpoofedProperties: Record<
-	Exclude<Platform, 'off'>,
-	{ browser: string }
-> = {
-	desktop: { browser: 'Discord Client' },
-	web: { browser: 'Chrome' },
-	meta: { browser: 'Discord VR' },
-	console: { browser: 'Discord Embedded' },
-}
+const WindowsChromeUA =
+	'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36'
+
+/**
+ * Gateway IDENTIFY properties that make Discord show each client icon. Only
+ * changing `browser` left a phone's os/device behind (a combination no real
+ * client sends), and Discord then ended the session (4003, 4004, logout).
+ */
+const SpoofedProperties: Record<Exclude<Platform, 'off'>, Record<string, unknown>> =
+	{
+		desktop: {
+			os: 'Windows',
+			os_version: '10.0.22631',
+			device: '',
+			browser: 'Discord Client',
+		},
+		web: {
+			os: 'Windows',
+			os_version: '10',
+			device: '',
+			browser: 'Chrome',
+			browser_version: '130.0.0.0',
+			browser_user_agent: WindowsChromeUA,
+		},
+		meta: { os: 'Android', os_version: '12', device: 'Quest', browser: 'Discord VR' },
+		console: {
+			os: 'Windows',
+			os_version: '10',
+			device: '',
+			browser: 'Discord Embedded',
+		},
+	}
+
+/** Phone-only fields that no desktop, web, VR or console client sends. */
+const PhoneOnlyProperties = ['device_vendor_id', 'os_sdk_version']
 
 const HeartbeatOp = 1
 const IdentifyOp = 2
@@ -144,6 +169,7 @@ function applySpoof(payload: IdentifyPayload | undefined) {
 	const platform = getPlatform()
 	if (!armed || platform === 'off' || !payload?.properties) return false
 	Object.assign(payload.properties, SpoofedProperties[platform])
+	for (const key of PhoneOnlyProperties) delete payload.properties[key]
 	// A spoofed login makes READY slow, and the app sends its post-login ops
 	// early (4003). Hold them back for every spoofed login, not just forced ones.
 	guardUntil = Date.now() + GuardWindowMs
