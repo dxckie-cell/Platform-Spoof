@@ -1,6 +1,6 @@
 import { getModules } from '@valenced/modules/finders'
 import { withProps } from '@valenced/modules/finders/filters'
-import { after, before, instead } from '@valenced/patcher'
+import { after, before } from '@valenced/patcher'
 import SettingsComponent from './settings'
 import type { JsonStorage } from '@valenced/json-storage'
 
@@ -205,14 +205,14 @@ function patchTransport(socket: GatewaySocket) {
 	if (transportPatches.has(transport)) return
 
 	const unwrapClose = wrapClose(transport)
-	const unpatchSend = instead(
-		transport,
-		'send',
-		(args: unknown[], original: (...a: unknown[]) => unknown) => {
+	const originalSend = transport.send
+	const wrappedSend = function (this: Transport, ...args: unknown[]) {
+			const call = (...next: unknown[]) =>
+				(originalSend as (...a: unknown[]) => unknown).apply(this ?? transport, next)
 			const [data] = args
 			if (typeof data !== 'string') {
 				trackSend(transport, 'bin')
-				return original(...args)
+				return call(...args)
 			}
 
 			let out = data
@@ -246,9 +246,12 @@ function patchTransport(socket: GatewaySocket) {
 					reportError(e)
 				}
 			}
-			return original(out, ...args.slice(1))
-		},
-	)
+			return call(out, ...args.slice(1))
+	}
+	transport.send = wrappedSend
+	const unpatchSend = () => {
+		if (transport.send === wrappedSend) transport.send = originalSend
+	}
 	transportPatches.set(transport, () => {
 		unpatchSend()
 		unwrapClose()
