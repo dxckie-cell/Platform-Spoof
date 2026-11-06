@@ -132,6 +132,18 @@ function applySpoof(payload: IdentifyPayload | undefined) {
 }
 
 const closeLog: string[] = []
+/** Ops sent on each gateway connection, to see what led to a rejected close. */
+const sentOps = new WeakMap<Transport, { t0: number; ops: string[] }>()
+
+function trackSend(transport: Transport, op: unknown) {
+	let entry = sentOps.get(transport)
+	if (!entry) sentOps.set(transport, (entry = { t0: Date.now(), ops: [] }))
+	entry.ops.push(`${op}@${((Date.now() - entry.t0) / 1000).toFixed(1)}`)
+	if (entry.ops.length > 8) entry.ops.shift()
+}
+
+const describeOps = (transport: Transport) =>
+	`sent[${sentOps.get(transport)?.ops.join(',') ?? ''}]`
 
 function recordClose(note: string, platform: Platform = getPlatform()) {
 	closeLog.push(note)
@@ -160,11 +172,13 @@ function wrapClose(transport: Transport) {
 				const when = new Date().toISOString()
 				if (code === AuthFailedCode && !authRescueUsed) {
 					authRescueUsed = true
-					const note = `${code} ${event?.reason ?? ''} at ${when}: spoof turned off to avoid logout`
+					const note = `${code} ${event?.reason ?? ''} ${describeOps(transport)} at ${when}: spoof turned off to avoid logout`
 					recordClose(note, DefaultPlatform)
 					forwarded = { ...event, code: ReconnectCode }
 				} else if (code !== undefined && code !== 1000 && code !== 1005) {
-					recordClose(`${code} ${event?.reason ?? ''} at ${when}`)
+					recordClose(
+						`${code} ${event?.reason ?? ''} ${describeOps(transport)} at ${when}`,
+					)
 				}
 			}
 		} catch (e) {
@@ -186,9 +200,13 @@ function patchTransport(socket: GatewaySocket) {
 
 	const unwrapClose = wrapClose(transport)
 	const unpatchSend = before(transport, 'send', ([data]) => {
-			if (typeof data !== 'string') return [data]
+			if (typeof data !== 'string') {
+				trackSend(transport, 'bin')
+				return [data]
+			}
 			try {
 				const frame = JSON.parse(data)
+				trackSend(transport, frame?.op)
 				if (frame?.op === IdentifyOp && applySpoof(frame.d))
 					return [JSON.stringify(frame)]
 			} catch (e) {
@@ -273,7 +291,7 @@ function awaitReconnect(socket: GatewaySocket, previous?: Transport) {
 				watchForNewTransport(socket, previous)
 				return
 			}
-			if (tries < 6) return attempt(200, tries + 1)
+			if (tries < 12) return attempt(250, tries + 1)
 
 			try {
 				socket.connect()
