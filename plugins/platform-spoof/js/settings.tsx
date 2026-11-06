@@ -90,12 +90,12 @@ function useReconnectStatus() {
 export default function SettingsComponent({
 	api: { jsonStorage: storage },
 }: SettingsComponentProps) {
-	const { platform = DefaultPlatform, lastClose } = storage.use() ?? {}
+	const { platform = DefaultPlatform, lastClose, identifyProps } = storage.use() ?? {}
 	const status = useReconnectStatus()
 
 	function select(value: Platform) {
 		if (value === platform) return
-		storage.set({ platform: value })
+		storage.set({ platform: value, identifyProps: undefined })
 		forceIdentify()
 	}
 
@@ -131,6 +131,11 @@ export default function SettingsComponent({
 					)
 				})}
 			</TableRadioGroup>
+			{identifyProps && (
+				<Text variant="text-sm/medium" color="text-muted">
+					App identity: {identifyProps}
+				</Text>
+			)}
 			{lastClose && (
 				<Text variant="text-sm/medium" color="text-muted">
 					Last gateway close: {lastClose}

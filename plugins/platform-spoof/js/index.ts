@@ -14,6 +14,8 @@ export interface Settings {
 	platform: Platform
 	/** Last gateway close seen while spoofing, shown in settings for debugging. */
 	lastClose?: string
+	/** The app's own IDENTIFY properties before spoofing, for debugging. */
+	identifyProps?: string
 }
 
 const WindowsChromeUA =
@@ -165,9 +167,26 @@ function poll(everyMs: number, maxTries: number, tick: () => boolean | void) {
 /** Spoofing starts only once we force a reconnect after a normal login. */
 let armed = false
 
+/** Keeps the app's own properties (device id hidden) so the real shape can be copied. */
+function saveIdentifyProps(properties: Record<string, unknown>) {
+	if (storage?.cache?.identifyProps) return
+	const shown = { ...properties }
+	if ('device_vendor_id' in shown) shown.device_vendor_id = '<hidden>'
+	try {
+		storage?.set({
+			platform: getPlatform(),
+			lastClose: storage.cache?.lastClose,
+			identifyProps: JSON.stringify(shown).slice(0, 900),
+		})
+	} catch (e) {
+		reportError(e)
+	}
+}
+
 function applySpoof(payload: IdentifyPayload | undefined) {
 	const platform = getPlatform()
 	if (!armed || platform === 'off' || !payload?.properties) return false
+	saveIdentifyProps(payload.properties)
 	Object.assign(payload.properties, SpoofedProperties[platform])
 	for (const key of PhoneOnlyProperties) delete payload.properties[key]
 	// A spoofed login makes READY slow, and the app sends its post-login ops
@@ -194,7 +213,11 @@ function recordClose(note: string, platform: Platform = getPlatform()) {
 	closeLog.push(note)
 	if (closeLog.length > 3) closeLog.shift()
 	try {
-		storage?.set({ platform, lastClose: closeLog.join(' | ') })
+		storage?.set({
+			platform,
+			lastClose: closeLog.join(' | '),
+			identifyProps: storage.cache?.identifyProps,
+		})
 	} catch (e) {
 		reportError(e)
 	}
