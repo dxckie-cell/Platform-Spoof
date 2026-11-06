@@ -12,7 +12,7 @@
       ],
       "icon": "LaptopPhoneIcon",
       "channels": {
-        "latest": "1.0.15"
+        "latest": "1.0.16"
       },
       "versions": {
         "1.0.10": {
@@ -84,6 +84,19 @@
           "url": "https://dxckie-cell.github.io/Platform-Spoof/pool/dxckie.platform-spoof@1.0.15.zip",
           "sha256": "363d14f89e176a9a63c54b117dc0d48c093129a42bb82e3606c822c78a8e641c",
           "size": 3762,
+          "dependencies": {
+            "valenced.api": {
+              "version": ">=1 <2"
+            },
+            "discord": {
+              "version": "*"
+            }
+          }
+        },
+        "1.0.16": {
+          "url": "https://dxckie-cell.github.io/Platform-Spoof/pool/dxckie.platform-spoof@1.0.16.zip",
+          "sha256": "8bf19f136941dafe9f0bfab1394b202f3c9989fcbd0cb9aa1de33a3c44fbbd12",
+          "size": 3882,
           "dependencies": {
             "valenced.api": {
               "version": ">=1 <2"
