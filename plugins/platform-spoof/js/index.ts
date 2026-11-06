@@ -34,8 +34,6 @@ const AuthFailedCode = 4004
 const ReconnectCode = 4000
 const WebSocketConnecting = 0
 const WebSocketOpen = 1
-const WebSocketClosing = 2
-const WebSocketClosed = 3
 /** The gateway rate-limits IDENTIFY, so reconnects closer than this are deferred. */
 const MinReconnectIntervalMs = 3000
 
@@ -133,10 +131,13 @@ function applySpoof(payload: IdentifyPayload | undefined) {
 	return true
 }
 
-function recordClose(note: string) {
-	const platform = getPlatform()
+const closeLog: string[] = []
+
+function recordClose(note: string, platform: Platform = getPlatform()) {
+	closeLog.push(note)
+	if (closeLog.length > 3) closeLog.shift()
 	try {
-		storage?.set({ platform, lastClose: note })
+		storage?.set({ platform, lastClose: closeLog.join(' | ') })
 	} catch (e) {
 		reportError(e)
 	}
@@ -160,7 +161,7 @@ function wrapClose(transport: Transport) {
 				if (code === AuthFailedCode && !authRescueUsed) {
 					authRescueUsed = true
 					const note = `${code} ${event?.reason ?? ''} at ${when}: spoof turned off to avoid logout`
-					storage?.set({ platform: DefaultPlatform, lastClose: note })
+					recordClose(note, DefaultPlatform)
 					forwarded = { ...event, code: ReconnectCode }
 				} else if (code !== undefined && code !== 1000 && code !== 1005) {
 					recordClose(`${code} ${event?.reason ?? ''} at ${when}`)
@@ -272,7 +273,7 @@ function awaitReconnect(socket: GatewaySocket, previous?: Transport) {
 				watchForNewTransport(socket, previous)
 				return
 			}
-			if (tries < 5) return attempt(100, tries + 1)
+			if (tries < 6) return attempt(200, tries + 1)
 
 			try {
 				socket.connect()
@@ -283,17 +284,12 @@ function awaitReconnect(socket: GatewaySocket, previous?: Transport) {
 		}, delayMs)
 	}
 
-	if (!previous) {
-		socket.close()
-		attempt(500, 0)
-		return
-	}
-	if (
-		previous.readyState !== WebSocketClosed &&
-		previous.readyState !== WebSocketClosing
-	)
-		previous.close()
-	attempt(300, 0)
+	// Always close through Discord's own socket so its heartbeat timers stop.
+	// Closing only the raw transport left a stale heartbeat that was sent on the
+	// next connection before it logged in (gateway close 4003 Not authenticated),
+	// which then ended in 4004 and a logout.
+	socket.close()
+	attempt(500, 0)
 }
 
 /** Drops the current session so the gateway sends a fresh IDENTIFY. */
@@ -361,6 +357,7 @@ function teardown() {
 	retryPending = false
 	lastIdentifyAt = 0
 	forcedSockets = new WeakSet()
+	closeLog.length = 0
 	unpatchSocket?.()
 	unpatchTransports()
 	unpatchSocket = patchedSocket = socketModule = storage = undefined
