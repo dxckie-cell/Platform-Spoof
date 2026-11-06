@@ -158,7 +158,7 @@ function trackSend(transport: Transport, op: unknown) {
 	let entry = sentOps.get(transport)
 	if (!entry) sentOps.set(transport, (entry = { t0: Date.now(), ops: [] }))
 	entry.ops.push(`${op}@${((Date.now() - entry.t0) / 1000).toFixed(1)}`)
-	if (entry.ops.length > 8) entry.ops.shift()
+	if (entry.ops.length > 14) entry.ops.shift()
 }
 
 const describeOps = (transport: Transport) =>
@@ -216,10 +216,11 @@ function wrapClose(transport: Transport) {
 function watchReady(transport: Transport) {
 	if (typeof transport.addEventListener !== 'function') return () => {}
 	const onMessage = (event: { data?: unknown }) => {
-		if (!awaitingReady.has(transport)) return
 		const d = event?.data as { byteLength?: number; size?: number } | string | undefined
 		const size = typeof d === 'string' ? d.length : (d?.byteLength ?? d?.size ?? 0)
-		if (size < 500) return
+		// Debug: show incoming messages (as `in<bytes>`) next to what we sent.
+		trackSend(transport, `in${size}`)
+		if (!awaitingReady.has(transport) || size < 500) return
 		awaitingReady.delete(transport)
 		readyTransports.add(transport)
 	}

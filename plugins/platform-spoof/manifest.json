@@ -6,7 +6,7 @@
 	"author": "k1ng_op <641266820187160576> (https://github.com/k1ng0p \"GitHub\")",
 	"icon": "LaptopPhoneIcon",
 	"contributors": ["dxckie-cell"],
-	"version": "1.0.11",
+	"version": "1.0.12",
 	"dependencies": {
 		"valenced.api": {
 			"version": ">=1 <2"
