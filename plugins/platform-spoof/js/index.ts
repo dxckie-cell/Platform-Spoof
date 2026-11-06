@@ -176,6 +176,46 @@ function applySpoof(payload: IdentifyPayload | undefined) {
 	return true
 }
 
+/**
+ * The app also sends its identity with every REST request (X-Super-Properties).
+ * Discord can compare that with the gateway IDENTIFY, so keep them the same.
+ */
+const spoofSuper = (value: unknown) => {
+	const platform = getPlatform()
+	if (!armed || platform === 'off') return value
+	try {
+		const merge = (props: Record<string, unknown>) => {
+			Object.assign(props, SpoofedProperties[platform])
+			for (const key of PhoneOnlyProperties) delete props[key]
+			return props
+		}
+		if (typeof value === 'string')
+			return btoa(JSON.stringify(merge(JSON.parse(atob(value)))))
+		if (value && typeof value === 'object')
+			return merge({ ...(value as Record<string, unknown>) })
+	} catch (e) {
+		reportError(e)
+	}
+	return value
+}
+
+function patchSuperProperties() {
+	const unpatches: (() => void)[] = []
+	for (const name of ['getSuperPropertiesBase64', 'getSuperProperties'])
+		unpatches.push(
+			getModules(
+				withProps<Record<string, (...args: unknown[]) => unknown>>(name),
+				mod => {
+					unpatches.push(after(mod, name, result => spoofSuper(result)))
+					recordClose(`patched ${name}`, getPlatform())
+				},
+			),
+		)
+	return () => {
+		for (const unpatch of unpatches) unpatch()
+	}
+}
+
 const closeLog: string[] = []
 /** Ops sent on each gateway connection, to see what led to a rejected close. */
 const sentOps = new WeakMap<Transport, { t0: number; ops: string[] }>()
@@ -192,7 +232,7 @@ const describeOps = (transport: Transport) =>
 
 function recordClose(note: string, platform: Platform = getPlatform()) {
 	closeLog.push(note)
-	if (closeLog.length > 3) closeLog.shift()
+	if (closeLog.length > 4) closeLog.shift()
 	try {
 		storage?.set({ platform, lastClose: closeLog.join(' | ') })
 	} catch (e) {
@@ -543,6 +583,7 @@ export default plugin<{ jsonStorage: Settings }>({
 
 		cleanup(
 			teardown,
+			patchSuperProperties(),
 			getModules(withProps<SocketModule>('getSocket', 'isConnected'), mod => {
 				socketModule = mod
 				attachToGateway()
