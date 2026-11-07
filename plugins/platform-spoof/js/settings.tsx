@@ -48,21 +48,6 @@ const PlatformRows: Record<
 		subLabel: 'Shows PlayStation Icon',
 		icon: 'ic_playstation_device_ps5_32px',
 	},
-	control: {
-		label: 'Test 1: reconnect only',
-		subLabel: 'Reconnects without spoofing (debug)',
-		icon: 'MobilePhoneIcon',
-	},
-	control_locale: {
-		label: 'Test 2: change locale only',
-		subLabel: 'Changes only system_locale (debug)',
-		icon: 'MobilePhoneIcon',
-	},
-	control_os: {
-		label: 'Test 3: change OS only',
-		subLabel: 'Changes only os to Windows (debug)',
-		icon: 'MobilePhoneIcon',
-	},
 }
 
 type SettingsComponentProps = ComponentProps<
